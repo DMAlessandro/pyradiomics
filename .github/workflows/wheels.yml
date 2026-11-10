@@ -1,0 +1,100 @@
+name: wheels
+
+# Builds PyRadiomics wheels from one pinned upstream commit, once, for SeedGrow.
+# Manual only: nothing runs on push, pull request or schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish the wheels as a GitHub Release when every build passes"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  # PR AIM-Harvard/pyradiomics#952 head: master 8ed5793 + the Python 3.10-3.13
+  # fixes (LBP3D on SciPy >= 1.15) + the feature-equivalence test suite.
+  # The same commit is kept in this fork as branch pinned/pr952.
+  SOURCE_SHA: 4d64928d8b9b554b5a23b32632f06e67db2eb169
+  FORCE_COLOR: 3
+
+jobs:
+  build_wheels:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64,  os: ubuntu-latest,  build: "cp312-manylinux_x86_64 cp313-manylinux_x86_64" }
+          - { name: windows-amd64, os: windows-latest, build: "cp312-win_amd64 cp313-win_amd64" }
+          - { name: macos-x86_64,  os: macos-15-intel, build: "cp312-macosx_x86_64 cp313-macosx_x86_64" }
+          - { name: macos-arm64,   os: macos-14,       build: "cp312-macosx_arm64 cp313-macosx_arm64" }
+    steps:
+      - name: Check out this branch (workflow and smoke test)
+        uses: actions/checkout@v7.0.1
+
+      - name: Check out the pinned PyRadiomics source with full history (setuptools_scm needs it)
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: pyradiomics
+          fetch-depth: 0
+
+      - name: Confirm the source commit
+        shell: bash
+        run: |
+          test "$(git -C pyradiomics rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C pyradiomics describe --tags --long
+
+      - uses: pypa/cibuildwheel@v4.3.5
+        with:
+          package-dir: pyradiomics
+          output-dir: wheelhouse
+        env:
+          CIBW_BUILD: ${{ matrix.build }}
+          CIBW_ARCHS: native
+          # Upstream's suite (incl. tests/version_equivalence against 3.0.1) plus an LBP3D smoke test.
+          CIBW_TEST_EXTRAS: "test,lbp3d"
+          CIBW_TEST_COMMAND: >-
+            pytest {package}/tests -p no:cacheprovider -q &&
+            python {project}/smoke_test.py
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: wheels-${{ matrix.name }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  release:
+    needs: build_wheels
+    if: ${{ inputs.release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          ls -l
+          test "$(ls *.whl | wc -l)" -eq 8
+          sha256sum *.whl > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short=${SOURCE_SHA:0:9}
+          gh release create "wheels-$short-r${{ github.run_number }}" dist/*.whl dist/SHA256SUMS \
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "PyRadiomics wheels @ $short (run ${{ github.run_number }})" \
+            --notes "Built by run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} from AIM-Harvard/pyradiomics PR #952 head $SOURCE_SHA (branch pinned/pr952). CPython 3.12 and 3.13; manylinux x86_64, win_amd64, macOS x86_64, macOS arm64. Every wheel passed upstream's test suite, tests/version_equivalence and smoke_test.py (LBP3D) before release."

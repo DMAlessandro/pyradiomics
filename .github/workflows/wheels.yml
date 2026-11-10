@@ -31,7 +31,7 @@ jobs:
           - { name: linux-x86_64,  os: ubuntu-latest,  build: "cp312-manylinux_x86_64 cp313-manylinux_x86_64" }
           - { name: windows-amd64, os: windows-latest, build: "cp312-win_amd64 cp313-win_amd64" }
           - { name: macos-x86_64,  os: macos-15-intel, build: "cp312-macosx_x86_64 cp313-macosx_x86_64" }
-          - { name: macos-arm64,   os: macos-14,       build: "cp312-macosx_arm64 cp313-macosx_arm64" }
+          - { name: macos-arm64,   os: macos-15,       build: "cp312-macosx_arm64 cp313-macosx_arm64" }
     steps:
       - name: Check out this branch (workflow and smoke test)
         uses: actions/checkout@v7.0.1
